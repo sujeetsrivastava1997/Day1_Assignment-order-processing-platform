@@ -1,0 +1,24 @@
+{{- range $name, $cfg := dict "order-processor" .Values.services.orderProcessor "notification-service" .Values.services.notificationService }}
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: {{ $name }}}
+spec:
+  replicas: {{ $cfg.replicas }}
+  selector: {matchLabels: {app: {{ $name }}}}
+  template:
+    metadata: {labels: {app: {{ $name }}}}
+    spec:
+      containers:
+      - name: {{ $name }}
+        image: "{{ $.Values.global.imageRegistry }}/{{ $cfg.image }}:{{ $.Values.imageTag }}"
+        imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+        envFrom: [{secretRef: {name: order-processing-secrets}}]
+        env:
+        {{- if eq $name "order-processor" }}
+        - {name: ORDERS_QUEUE, value: orders}
+        - {name: NOTIFICATIONS_QUEUE, value: notifications}
+        {{- else }}
+        - {name: NOTIFICATIONS_QUEUE, value: notifications}
+        {{- end }}
+---
+{{- end }}

@@ -1,0 +1,17 @@
+global:
+  imageRegistry: "REPLACE_ME"
+  imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+imageTag: latest
+services:
+  orderApi:
+    image: order-api
+    port: 3000
+    replicas: 2
+  orderProcessor:
+    image: order-processor
+    replicas: 1
+  notificationService:
+    image: notification-service
+    replicas: 1
+storageConnectionString: ""
