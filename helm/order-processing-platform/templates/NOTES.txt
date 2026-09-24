@@ -1,0 +1,2 @@
+Order API service:
+kubectl get svc order-api

@@ -1,0 +1,136 @@
+name: Order Processing Platform CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
+  AKS_RESOURCE_GROUP: rg-order-processing
+  AKS_CLUSTER_NAME: sujeet9242026-aks
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        service:
+          - order-api
+          - order-processor
+          - notification-service
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: services/${{ matrix.service }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm --prefix services/${{ matrix.service }} ci
+
+      - name: Build
+        run: npm --prefix services/${{ matrix.service }} run build
+
+      - name: Test
+        run: npm --prefix services/${{ matrix.service }} test --if-present
+
+  docker:
+    name: Build and Push Images
+    needs: test
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Login to ACR
+        run: az acr login --name ${{ secrets.ACR_NAME }}
+
+      - name: Build Order API
+        run: |
+          docker build -t $ACR_LOGIN_SERVER/order-api:$IMAGE_TAG \
+            -t $ACR_LOGIN_SERVER/order-api:latest \
+            services/order-api
+
+      - name: Build Order Processor
+        run: |
+          docker build -t $ACR_LOGIN_SERVER/order-processor:$IMAGE_TAG \
+            -t $ACR_LOGIN_SERVER/order-processor:latest \
+            services/order-processor
+
+      - name: Build Notification Service
+        run: |
+          docker build -t $ACR_LOGIN_SERVER/notification-service:$IMAGE_TAG \
+            -t $ACR_LOGIN_SERVER/notification-service:latest \
+            services/notification-service
+
+      - name: Push images
+        run: |
+          docker push $ACR_LOGIN_SERVER/order-api:$IMAGE_TAG
+          docker push $ACR_LOGIN_SERVER/order-api:latest
+          docker push $ACR_LOGIN_SERVER/order-processor:$IMAGE_TAG
+          docker push $ACR_LOGIN_SERVER/order-processor:latest
+          docker push $ACR_LOGIN_SERVER/notification-service:$IMAGE_TAG
+          docker push $ACR_LOGIN_SERVER/notification-service:latest
+
+  deploy:
+    name: Deploy to AKS
+    needs: docker
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group "$AKS_RESOURCE_GROUP" \
+            --name "$AKS_CLUSTER_NAME" \
+            --overwrite-existing
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Deploy Helm release
+        run: |
+          helm upgrade --install order-processing \
+            ./helm/order-processing-platform \
+            --set global.imageRegistry="$ACR_LOGIN_SERVER" \
+            --set imageTag="$IMAGE_TAG" \
+            --set orderApi.image.repository="$ACR_LOGIN_SERVER/order-api" \
+            --set orderApi.image.tag="$IMAGE_TAG" \
+            --set orderProcessor.image.repository="$ACR_LOGIN_SERVER/order-processor" \
+            --set orderProcessor.image.tag="$IMAGE_TAG" \
+            --set notificationService.image.repository="$ACR_LOGIN_SERVER/notification-service" \
+            --set notificationService.image.tag="$IMAGE_TAG" \
+            --set-string storageConnectionString="${{ secrets.STORAGE_CONNECTION_STRING }}"
+
+      - name: Rollout validation
+        run: |
+          kubectl rollout status deployment/order-api --timeout=180s
+          kubectl rollout status deployment/order-processor --timeout=180s
+          kubectl rollout status deployment/notification-service --timeout=180s

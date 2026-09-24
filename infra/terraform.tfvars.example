@@ -1,0 +1,6 @@
+location = "East US"
+resource_group_name = "rg-order-processing"
+name_prefix = "opp"
+environment = "dev"
+aks_node_count = 1
+aks_vm_size = "Standard_B2s"

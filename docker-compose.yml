@@ -1,0 +1,26 @@
+services:
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.33.0
+    command: azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0
+    ports: ["10000:10000","10001:10001","10002:10002"]
+  order-api:
+    build: ./services/order-api
+    environment:
+      PORT: 3000
+      AZURE_STORAGE_CONNECTION_STRING: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFeqC8e4q7xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ==;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;
+      ORDERS_QUEUE: orders
+    depends_on: [azurite]
+    ports: ["3000:3000"]
+  order-processor:
+    build: ./services/order-processor
+    environment:
+      AZURE_STORAGE_CONNECTION_STRING: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFeqC8e4q7xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ==;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;
+      ORDERS_QUEUE: orders
+      NOTIFICATIONS_QUEUE: notifications
+    depends_on: [azurite]
+  notification-service:
+    build: ./services/notification-service
+    environment:
+      AZURE_STORAGE_CONNECTION_STRING: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFeqC8e4q7xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ0k5Yq3xQ==;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;
+      NOTIFICATIONS_QUEUE: notifications
+    depends_on: [azurite]

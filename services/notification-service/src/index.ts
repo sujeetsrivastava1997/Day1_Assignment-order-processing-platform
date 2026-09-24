@@ -1,0 +1,4 @@
+import { QueueClient } from '@azure/storage-queue';
+export function formatNotification(n:{orderId:string;email:string;message:string}){return `TO=${n.email} | ${n.message} | orderId=${n.orderId}`;}
+async function run(){const conn=process.env.AZURE_STORAGE_CONNECTION_STRING;if(!conn) throw new Error('AZURE_STORAGE_CONNECTION_STRING is required');const q=new QueueClient(conn,process.env.NOTIFICATIONS_QUEUE||'notifications');await q.createIfNotExists();console.log('notification-service started');setInterval(async()=>{try{const r=await q.receiveMessages({numberOfMessages:5,visibilityTimeout:60});for(const m of r.receivedMessageItems){const n=JSON.parse(Buffer.from(m.messageText,'base64').toString());console.log(JSON.stringify({event:'notification_sent',text:formatNotification(n)}));await q.deleteMessage(m.messageId,m.popReceipt)}}catch(e){console.error('notification error',e)}},3000)}
+if(require.main===module) run();
