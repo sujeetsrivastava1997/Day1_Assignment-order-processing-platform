@@ -1,0 +1,92 @@
+name: CI-CD
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '20'}
+      - run: npm install
+      - run: npm test
+      - run: npm run build
+      - run: npm run lint
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform -chdir=infra init -backend=false
+      - run: terraform -chdir=infra validate
+
+  docker-scan:
+    needs: test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [order-api, order-processor, notification-service]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t $REGISTRY/${{ matrix.service }}:$IMAGE_TAG services/${{ matrix.service }}
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ matrix.service }}:${{ env.IMAGE_TAG }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - run: az acr login --name ${{ vars.ACR_NAME }}
+      - run: docker push $REGISTRY/${{ matrix.service }}:$IMAGE_TAG
+
+  deploy:
+    needs: docker-scan
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Get AKS credentials
+        run: az aks get-credentials --resource-group "${{ vars.AKS_RESOURCE_GROUP }}" --name "${{ vars.AKS_CLUSTER_NAME }}" --overwrite-existing
+      - name: Create storage secret
+        env:
+          STORAGE_CONNECTION_STRING: ${{ secrets.STORAGE_CONNECTION_STRING }}
+        run: |
+          kubectl create secret generic order-processing-secrets \
+            --from-literal=AZURE_STORAGE_CONNECTION_STRING="$STORAGE_CONNECTION_STRING" \
+            --dry-run=client -o yaml | kubectl apply -f -
+      - name: Helm deploy
+        run: |
+          helm upgrade --install order-processing ./helm/order-processing-platform \
+            --set global.imageRegistry="${{ vars.ACR_LOGIN_SERVER }}" \
+            --set imageTag="$IMAGE_TAG" \
+            --wait --timeout 5m
+      - name: Validate rollout
+        run: |
+          kubectl rollout status deployment/order-api --timeout=180s
+          kubectl rollout status deployment/order-processor --timeout=180s
+          kubectl rollout status deployment/notification-service --timeout=180s
+      - name: Smoke test
+        run: |
+          kubectl run smoke-test --rm -i --restart=Never --image=curlimages/curl:8.10.1 -- \
+            curl -fsS http://order-api/health
